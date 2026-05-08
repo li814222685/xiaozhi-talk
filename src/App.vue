@@ -66,12 +66,6 @@
               <p class="message-content">{{ message.content }}</p>
             </div>
           </div>
-
-          <div v-if="currentResponse" class="message-wrapper assistant">
-            <div class="message-bubble">
-              <p class="message-content">{{ currentResponse }}</p>
-            </div>
-          </div>
         </div>
 
         <div class="input-area">
@@ -111,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted } from "vue";
 import { useWebSocket } from "@/composables/useWebSocket";
 import { useAudioCapture } from "@/composables/useAudioCapture";
 import { useAudioPlayback } from "@/composables/useAudioPlayback";
@@ -129,8 +123,8 @@ const isRecording = ref(false);
 const isPlaying = ref(false);
 const isFullscreen = ref(false);
 const messages = ref<Message[]>([]);
-const currentResponse = ref("");
 const inputText = ref("");
+let currentAssistantMessage: Message | null = null;
 
 const idleAvatar = "/src/assets/webp/hlw1.webp";
 const speakingAvatar = "/src/assets/webp/hlw2.webp";
@@ -162,18 +156,12 @@ let sendInterval: number | null = null;
 const init = async () => {
   try {
     console.log("[App] Starting WebSocket connection to:", wsUrl);
-    await connect(wsUrl);
-    isConnected.value = true;
-    console.log("[App] ✅ WebSocket connected successfully");
-
-    await setupWorklet();
-    await resume();
 
     onMessage(async (msg) => {
       console.log("[App] 📩 Message received:", msg.type, msg);
 
       if (msg.type === "audio" && msg.data) {
-        console.log("[App] � Audio data received");
+        console.log("[App] 🔊 Audio data received");
         const buffer = msg.data as ArrayBuffer;
         const int16Data = new Int16Array(buffer);
         await playInt16Array(int16Data);
@@ -181,34 +169,69 @@ const init = async () => {
       } else if (msg.type === "stt") {
         console.log("[App] 📝 STT:", msg.text);
         if (msg.text) {
-          currentResponse.value += msg.text;
+          addMessage({
+            role: "user",
+            content: msg.text,
+          });
         }
       } else if (msg.type === "llm") {
         console.log("[App] 💬 LLM response");
         if (msg.content) {
-          currentResponse.value += msg.content;
+          const assistantMsg: Message = {
+            id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+            role: "assistant",
+            content: msg.content,
+            timestamp: Date.now(),
+          };
+          messages.value.push(assistantMsg);
+          currentAssistantMessage = assistantMsg;
         }
       } else if (msg.type === "tts") {
         console.log("[App] 🔊 TTS:", msg.state, msg.text);
         if (msg.state === "start") {
           isPlaying.value = true;
+          if (!currentAssistantMessage) {
+            const assistantMsg: Message = {
+              id:
+                Date.now().toString() + Math.random().toString(36).substr(2, 9),
+              role: "assistant",
+              content: "",
+              timestamp: Date.now(),
+            };
+            messages.value.push(assistantMsg);
+            currentAssistantMessage = assistantMsg;
+          }
         } else if (msg.state === "stop") {
           isPlaying.value = false;
+          currentAssistantMessage = null;
         } else if (
           (msg.state === "sentence_start" || msg.state === "sentence_end") &&
           msg.text
         ) {
-          currentResponse.value += msg.text;
+          if (currentAssistantMessage) {
+            currentAssistantMessage.content += msg.text;
+          }
         }
       } else if (msg.type === "error") {
         console.error("[App] ❌ Server error:", msg);
-        currentResponse.value +=
-          "\n[错误] " + (msg.message || msg.error || "未知错误");
+        const errorMsg = msg.message || msg.error || "未知错误";
+        addMessage({
+          role: "assistant",
+          content: "[错误] " + errorMsg,
+        });
         isPlaying.value = false;
+        currentAssistantMessage = null;
       } else {
         console.log("[App] 📋 Other message:", msg.type);
       }
     });
+
+    await connect(wsUrl);
+    isConnected.value = true;
+    console.log("[App] ✅ WebSocket connected successfully");
+
+    await setupWorklet();
+    await resume();
 
     console.log("[App] ✅ Initialized successfully");
   } catch (error) {
@@ -245,7 +268,6 @@ const startRecording = async () => {
 
     await startCapture(16000);
     isRecording.value = true;
-    currentResponse.value = "";
     isPlaying.value = false;
 
     console.log("[App] 📤 Sending start listen (manual mode)...");
@@ -295,7 +317,6 @@ const stopPlayback = () => {
   abort("user_request");
 
   isPlaying.value = false;
-  currentResponse.value = "";
 
   console.log("[App] ⏹️ Playback stopped");
 };
@@ -359,33 +380,6 @@ const shareApp = async () => {
     console.error("[App] Failed to copy URL:", error);
   }
 };
-
-watch(currentResponse, (newValue) => {
-  if (newValue) {
-    const lastAssistantMsg = messages.value
-      .filter((m) => m.role === "assistant")
-      .pop();
-    if (lastAssistantMsg) {
-      lastAssistantMsg.content = newValue;
-    } else {
-      addMessage({
-        role: "assistant",
-        content: newValue,
-      });
-    }
-  }
-});
-
-watch(isPlaying, (isPlayingNow) => {
-  if (!isPlayingNow && currentResponse.value) {
-    const lastAssistantMsg = messages.value
-      .filter((m) => m.role === "assistant")
-      .pop();
-    if (lastAssistantMsg) {
-      lastAssistantMsg.content = currentResponse.value;
-    }
-  }
-});
 
 onMounted(async () => {
   const savedTheme = localStorage.getItem("xiaozhi-theme") as

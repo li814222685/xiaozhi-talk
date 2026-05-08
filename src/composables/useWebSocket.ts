@@ -1,4 +1,5 @@
-import { ref, onUnmounted } from "vue";
+import { ref, onUnmounted, watch } from "vue";
+import { useWebSocket as useVueUseWebSocket } from "@vueuse/core";
 
 interface WebSocketMessage {
   type: string;
@@ -45,167 +46,220 @@ function getOrCreateClientId(): string {
 }
 
 export function useWebSocket() {
-  const ws = ref<WebSocket | null>(null);
   const isConnected = ref(false);
-  const reconnectAttempts = ref(0);
-  const maxReconnectAttempts = 5;
   const isReady = ref(false);
   const sessionId = ref<string>("");
+  const maxReconnectAttempts = 5;
 
   let messageHandlers: ((msg: WebSocketMessage) => void)[] = [];
   let url: string = "";
+  let vueUseWs: ReturnType<typeof useVueUseWebSocket> | null = null;
 
-  const connect = (serverUrl: string): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      url = serverUrl;
-      const deviceId = getOrCreateDeviceId();
-      const clientId = getOrCreateClientId();
+  const handleMessage = (data: ArrayBuffer | string | null) => {
+    if (!data) return;
 
-      const fullUrl = url.includes("?")
-        ? `${url}&device-id=${deviceId}&client-id=${clientId}`
-        : `${url}?device-id=${deviceId}&client-id=${clientId}`;
+    console.log("[WebSocket] 📥 Received raw data:", data);
+    console.log(
+      "[WebSocket] Data type:",
+      typeof data,
+      ArrayBuffer.isView(data),
+      data instanceof ArrayBuffer
+    );
 
-      console.log("[WebSocket] Connecting to:", fullUrl);
+    if (data instanceof ArrayBuffer) {
+      console.log(
+        "[WebSocket] 🔊 Binary audio data received, length:",
+        data.byteLength
+      );
+      messageHandlers.forEach((handler) =>
+        handler({
+          type: "audio",
+          data: data,
+        })
+      );
+    } else {
+      try {
+        const msg =
+          typeof data === "string"
+            ? JSON.parse(data)
+            : JSON.parse(new TextDecoder().decode(data as ArrayBuffer));
 
-      const wsInstance = new WebSocket(fullUrl);
-      wsInstance.binaryType = "arraybuffer";
-
-      wsInstance.onopen = () => {
-        console.log("[WebSocket] ✅ Connection opened!");
-        isConnected.value = true;
-
-        const helloMessage = {
-          type: "hello",
-          version: 1,
-          transport: "websocket",
-          features: {
-            mcp: false,
-          },
-          audio_params: {
-            format: "opus",
-            sample_rate: 16000,
-            channels: 1,
-            frame_duration: 60,
-          },
-        };
-
-        console.log("[WebSocket] 📤 Sending hello:", helloMessage);
-        wsInstance.send(JSON.stringify(helloMessage));
-
-        ws.value = wsInstance;
-      };
-
-      wsInstance.onmessage = (event) => {
-        console.log("[WebSocket] 📥 Received raw data:", event.data);
-
-        if (event.data instanceof ArrayBuffer) {
-          console.log(
-            "[WebSocket] 🔊 Binary audio data received, length:",
-            event.data.byteLength
-          );
-          messageHandlers.forEach((handler) =>
-            handler({
-              type: "audio",
-              data: event.data,
-            })
-          );
-        } else {
-          try {
-            const msg = JSON.parse(event.data);
-            console.log(
-              "[WebSocket] 📥 Parsed JSON message:",
-              JSON.stringify(msg, null, 2)
-            );
-
-            if (msg.type === "hello") {
-              console.log("[WebSocket] ✅ Received server hello");
-
-              if (msg.session_id) {
-                sessionId.value = msg.session_id;
-                console.log("[WebSocket] ✅ Got session_id:", sessionId.value);
-              } else {
-                console.warn("[WebSocket] ⚠️ No session_id in hello message");
-              }
-
-              isReady.value = true;
-
-              if (msg.audio_params) {
-                console.log(
-                  "[WebSocket] Server audio params:",
-                  msg.audio_params
-                );
-              }
-
-              messageHandlers.forEach((handler) => handler(msg));
-            } else if (msg.type === "stt") {
-              console.log("[WebSocket] 📝 STT message:", msg);
-              messageHandlers.forEach((handler) => handler(msg));
-            } else if (msg.type === "llm") {
-              console.log("[WebSocket] 💬 LLM message:", msg);
-              messageHandlers.forEach((handler) => handler(msg));
-            } else if (msg.type === "tts") {
-              console.log("[WebSocket] 🔊 TTS message:", msg.state, msg.text);
-              messageHandlers.forEach((handler) => handler(msg));
-            } else if (msg.type === "error") {
-              console.error("[WebSocket] ❌ Error message:", msg);
-              messageHandlers.forEach((handler) => handler(msg));
-            } else {
-              console.log("[WebSocket] 📋 Other message type:", msg.type);
-              messageHandlers.forEach((handler) => handler(msg));
-            }
-          } catch (error) {
-            console.error("[WebSocket] ❌ Failed to parse JSON:", error);
-            messageHandlers.forEach((handler) =>
-              handler({
-                type: "error",
-                data: event.data,
-              })
-            );
-          }
-        }
-      };
-
-      wsInstance.onerror = (error) => {
-        console.error("[WebSocket] ❌ Error event:", error);
-        reject(error);
-      };
-
-      wsInstance.onclose = (event) => {
-        console.log("[WebSocket] 🔌 Connection closed");
         console.log(
-          "[WebSocket] Close code:",
-          event.code,
-          "reason:",
-          event.reason
+          "[WebSocket] 📥 Parsed JSON message:",
+          JSON.stringify(msg, null, 2)
         );
-        isConnected.value = false;
-        isReady.value = false;
 
-        if (reconnectAttempts.value < maxReconnectAttempts) {
-          handleReconnect();
+        console.log("[WebSocket] Message type:", msg.type);
+
+        if (msg.type === "hello") {
+          console.log("[WebSocket] ✅ Received server hello");
+          console.log("[WebSocket] Before setting isReady:", isReady.value);
+
+          if (msg.session_id) {
+            sessionId.value = msg.session_id;
+            console.log("[WebSocket] ✅ Got session_id:", sessionId.value);
+          } else {
+            console.warn("[WebSocket] ⚠️ No session_id in hello message");
+          }
+
+          isReady.value = true;
+          console.log("[WebSocket] After setting isReady:", isReady.value);
+
+          if (msg.audio_params) {
+            console.log("[WebSocket] Server audio params:", msg.audio_params);
+          }
+
+          console.log(
+            "[WebSocket] Calling",
+            messageHandlers.length,
+            "handlers for hello"
+          );
+          messageHandlers.forEach((handler) => handler(msg));
+        } else if (msg.type === "stt") {
+          console.log("[WebSocket] 📝 STT message:", msg);
+          console.log(
+            "[WebSocket] Calling",
+            messageHandlers.length,
+            "handlers for stt"
+          );
+          messageHandlers.forEach((handler) => handler(msg));
+        } else if (msg.type === "llm") {
+          console.log("[WebSocket] 💬 LLM message:", msg);
+          console.log(
+            "[WebSocket] Calling",
+            messageHandlers.length,
+            "handlers for llm"
+          );
+          messageHandlers.forEach((handler) => handler(msg));
+        } else if (msg.type === "tts") {
+          console.log("[WebSocket] 🔊 TTS message:", msg.state, msg.text);
+          console.log(
+            "[WebSocket] Calling",
+            messageHandlers.length,
+            "handlers for tts"
+          );
+          messageHandlers.forEach((handler) => handler(msg));
+        } else if (msg.type === "error") {
+          console.error("[WebSocket] ❌ Error message:", msg);
+          console.log(
+            "[WebSocket] Calling",
+            messageHandlers.length,
+            "handlers for error"
+          );
+          messageHandlers.forEach((handler) => handler(msg));
+        } else {
+          console.log("[WebSocket] 📋 Other message type:", msg.type);
+          console.log(
+            "[WebSocket] Calling",
+            messageHandlers.length,
+            "handlers"
+          );
+          messageHandlers.forEach((handler) => handler(msg));
         }
-      };
-    });
+      } catch (error) {
+        console.error("[WebSocket] ❌ Failed to parse JSON:", error);
+        messageHandlers.forEach((handler) =>
+          handler({
+            type: "error",
+            data: data,
+          })
+        );
+      }
+    }
   };
 
-  const handleReconnect = () => {
-    if (reconnectAttempts.value < maxReconnectAttempts) {
-      reconnectAttempts.value++;
-      const delay = Math.min(
-        1000 * Math.pow(2, reconnectAttempts.value),
-        30000
-      );
-      console.log(
-        `[WebSocket] Reconnecting in ${delay}ms... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`
-      );
-      setTimeout(() => connect(url), delay);
-    } else {
-      console.error("[WebSocket] ❌ Max reconnect attempts reached!");
+  const sendHelloMessage = (wsInstance: WebSocket) => {
+    const helloMessage = {
+      type: "hello",
+      version: 1,
+      transport: "websocket",
+      features: {
+        mcp: false,
+      },
+      audio_params: {
+        format: "opus",
+        sample_rate: 16000,
+        channels: 1,
+        frame_duration: 60,
+      },
+    };
+
+    console.log("[WebSocket] 📤 Sending hello:", helloMessage);
+    wsInstance.send(JSON.stringify(helloMessage));
+  };
+
+  const connect = async (serverUrl: string): Promise<void> => {
+    url = serverUrl;
+    const deviceId = getOrCreateDeviceId();
+    const clientId = getOrCreateClientId();
+
+    const fullUrl = url.includes("?")
+      ? `${url}&device-id=${deviceId}&client-id=${clientId}`
+      : `${url}?device-id=${deviceId}&client-id=${clientId}`;
+
+    console.log("[WebSocket] Connecting to:", fullUrl);
+
+    vueUseWs = useVueUseWebSocket(fullUrl, {
+      autoReconnect: {
+        retries: maxReconnectAttempts,
+        delay: 1000,
+        onFailed() {
+          console.error("[WebSocket] ❌ Max reconnect attempts reached!");
+        },
+      },
+      immediate: false,
+    });
+
+    const { status, open } = vueUseWs;
+
+    watch(status, (newStatus) => {
+      const statusStr = String(newStatus);
+      console.log("[WebSocket] Status changed:", statusStr);
+
+      if (statusStr === "OPEN") {
+        if (!isConnected.value) {
+          isConnected.value = true;
+          if (vueUseWs?.ws.value) {
+            vueUseWs.ws.value.binaryType = "arraybuffer";
+            console.log("[WebSocket] Setting up direct onmessage handler");
+            vueUseWs.ws.value.onmessage = (event) => {
+              console.log(
+                "[WebSocket] 📥 Received from onmessage:",
+                event.data
+              );
+              handleMessage(event.data);
+            };
+            vueUseWs.ws.value.onerror = (error) => {
+              console.error("[WebSocket] ❌ WebSocket error:", error);
+            };
+            vueUseWs.ws.value.onclose = (event) => {
+              console.log(
+                "[WebSocket] 🔌 WebSocket closed:",
+                event.code,
+                event.reason
+              );
+            };
+            sendHelloMessage(vueUseWs.ws.value);
+          }
+        }
+      } else if (statusStr === "CLOSED" || statusStr === "CLOSING") {
+        if (isConnected.value) {
+          isConnected.value = false;
+          isReady.value = false;
+        }
+      }
+    });
+
+    try {
+      await open();
+    } catch (error) {
+      console.error("[WebSocket] ❌ Failed to connect:", error);
+      throw error;
     }
   };
 
   const send = (data: ArrayBuffer | string) => {
-    if (ws.value && ws.value.readyState === WebSocket.OPEN) {
+    if (vueUseWs?.ws.value && vueUseWs.ws.value.readyState === WebSocket.OPEN) {
       if (typeof data === "string") {
         console.log("[WebSocket] 📤 Sending text:", data);
       } else {
@@ -214,7 +268,7 @@ export function useWebSocket() {
           data.byteLength
         );
       }
-      ws.value.send(data);
+      vueUseWs.ws.value.send(data);
     } else {
       console.error("[WebSocket] ❌ Cannot send: WebSocket not open");
     }
@@ -264,8 +318,17 @@ export function useWebSocket() {
   };
 
   const sendText = (text: string) => {
+    console.log(
+      "[WebSocket] sendText called, isReady:",
+      isReady.value,
+      "sessionId:",
+      sessionId.value
+    );
+
     if (!isReady.value) {
-      console.error("[WebSocket] ❌ WebSocket not ready!");
+      console.error(
+        "[WebSocket] ❌ WebSocket not ready! Please wait for connection to establish."
+      );
       return;
     }
 
@@ -295,10 +358,10 @@ export function useWebSocket() {
   };
 
   const disconnect = () => {
-    if (ws.value) {
+    if (vueUseWs) {
       console.log("[WebSocket] 🔌 Manually disconnecting...");
-      ws.value.close();
-      ws.value = null;
+      vueUseWs.close();
+      vueUseWs = null;
     }
   };
 
@@ -313,7 +376,6 @@ export function useWebSocket() {
   });
 
   return {
-    ws,
     isConnected,
     sessionId,
     isReady,

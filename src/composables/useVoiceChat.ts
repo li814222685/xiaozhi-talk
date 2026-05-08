@@ -1,5 +1,5 @@
 import { ref, onUnmounted } from "vue";
-// import { useWebSocket } from "./useWebSocket";
+import { useWebSocket } from "./useWebSocket";
 import { useAudioCapture } from "./useAudioCapture";
 import { useAudioPlayback } from "./useAudioPlayback";
 
