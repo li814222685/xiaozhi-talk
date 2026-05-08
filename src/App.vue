@@ -15,35 +15,24 @@
         </div>
 
         <div class="header-right">
+          <button class="btn-icon" @click="toggleMagic">
+            <i class="mdi mdi-auto-fix icon"></i>
+          </button>
           <button class="btn-icon" @click="toggleTheme">
-            <svg
+            <i
               v-if="theme === 'dark'"
-              class="icon"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
-              />
-            </svg>
-            <svg
-              v-else
-              class="icon"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-              />
-            </svg>
+              class="mdi mdi-white-balance-sunny icon"
+            ></i>
+            <i v-else class="mdi mdi-weather-night icon"></i>
+          </button>
+          <button class="btn-icon" @click="toggleFullscreen">
+            <i
+              class="mdi icon"
+              :class="isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen'"
+            ></i>
+          </button>
+          <button class="btn-icon" @click="shareApp">
+            <i class="mdi mdi-share icon"></i>
           </button>
         </div>
       </div>
@@ -89,36 +78,19 @@
           <div class="input-container">
             <button
               class="voice-btn"
-              :disabled="!isConnected || isPlaying || isRecording"
-              @click="startRecording"
+              :class="{ recording: isRecording, playing: isPlaying }"
+              :disabled="!isConnected"
+              @click="handleVoiceClick"
             >
-              <svg
-                v-if="isRecording"
-                class="voice-icon"
-                fill="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <rect x="6" y="6" width="12" height="12" rx="2" />
-              </svg>
-              <svg
-                v-else
-                class="voice-icon"
-                fill="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"
-                />
-                <path
-                  d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"
-                />
-              </svg>
+              <i v-if="isRecording" class="mdi mdi-stop voice-icon"></i>
+              <i v-else-if="isPlaying" class="mdi mdi-stop voice-icon"></i>
+              <i v-else class="mdi mdi-microphone voice-icon"></i>
             </button>
 
             <textarea
               v-model="inputText"
               class="text-input"
-              placeholder="输入文字消息..."
+              placeholder="输入您想问的问题..."
               rows="1"
               @keydown.enter.exact.prevent="handleSendText"
               :disabled="isRecording || isPlaying"
@@ -129,19 +101,7 @@
               :disabled="!inputText.trim() || isRecording || isPlaying"
               @click="handleSendText"
             >
-              <svg
-                class="send-icon"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                />
-              </svg>
+              <i class="mdi mdi-send send-icon"></i>
             </button>
           </div>
         </div>
@@ -167,6 +127,7 @@ const theme = ref<"light" | "dark">("light");
 const isConnected = ref(false);
 const isRecording = ref(false);
 const isPlaying = ref(false);
+const isFullscreen = ref(false);
 const messages = ref<Message[]>([]);
 const currentResponse = ref("");
 const inputText = ref("");
@@ -174,9 +135,22 @@ const inputText = ref("");
 const idleAvatar = "/src/assets/webp/hlw1.webp";
 const speakingAvatar = "/src/assets/webp/hlw2.webp";
 
-const wsUrl = import.meta.env.VITE_WS_URL || "ws://192.168.112.254:8989";
+const isDev = import.meta.env.DEV;
+const wsUrl =
+  import.meta.env.VITE_WS_URL ||
+  (isDev ? "/xiaozhi/v1/" : "ws://192.168.112.254:8989/xiaozhi/v1/");
 
-const { connect, send, onMessage } = useWebSocket();
+const {
+  connect,
+  send,
+  sendText,
+  startListen,
+  stopListen,
+  abort,
+  onMessage,
+  isReady,
+  sessionId,
+} = useWebSocket();
 
 const { startCapture, stopCapture, getAudioData, floatTo16BitPCM } =
   useAudioCapture();
@@ -187,41 +161,95 @@ let sendInterval: number | null = null;
 
 const init = async () => {
   try {
+    console.log("[App] Starting WebSocket connection to:", wsUrl);
     await connect(wsUrl);
     isConnected.value = true;
+    console.log("[App] ✅ WebSocket connected successfully");
 
     await setupWorklet();
     await resume();
 
     onMessage(async (msg) => {
+      console.log("[App] 📩 Message received:", msg.type, msg);
+
       if (msg.type === "audio" && msg.data) {
+        console.log("[App] � Audio data received");
         const buffer = msg.data as ArrayBuffer;
         const int16Data = new Int16Array(buffer);
         await playInt16Array(int16Data);
         isPlaying.value = true;
-      } else if (msg.type === "text" || msg.type === "llm_text") {
-        currentResponse.value += msg.data.text || msg.data.content || "";
+      } else if (msg.type === "stt") {
+        console.log("[App] 📝 STT:", msg.text);
+        if (msg.text) {
+          currentResponse.value += msg.text;
+        }
+      } else if (msg.type === "llm") {
+        console.log("[App] 💬 LLM response");
+        if (msg.content) {
+          currentResponse.value += msg.content;
+        }
+      } else if (msg.type === "tts") {
+        console.log("[App] 🔊 TTS:", msg.state, msg.text);
+        if (msg.state === "start") {
+          isPlaying.value = true;
+        } else if (msg.state === "stop") {
+          isPlaying.value = false;
+        } else if (
+          (msg.state === "sentence_start" || msg.state === "sentence_end") &&
+          msg.text
+        ) {
+          currentResponse.value += msg.text;
+        }
       } else if (msg.type === "error") {
-        console.error("[Error]", msg.data);
+        console.error("[App] ❌ Server error:", msg);
+        currentResponse.value +=
+          "\n[错误] " + (msg.message || msg.error || "未知错误");
+        isPlaying.value = false;
+      } else {
+        console.log("[App] 📋 Other message:", msg.type);
       }
     });
 
-    console.log("[App] Initialized");
+    console.log("[App] ✅ Initialized successfully");
   } catch (error) {
-    console.error("[App] Failed to initialize:", error);
+    console.error("[App] ❌ Failed to initialize:", error);
+  }
+};
+
+const handleVoiceClick = () => {
+  console.log("[App] handleVoiceClick called");
+  console.log(
+    "[App] isRecording:",
+    isRecording.value,
+    "isPlaying:",
+    isPlaying.value
+  );
+
+  if (isRecording.value) {
+    console.log("[App] Stopping recording...");
+    stopRecording();
+  } else if (isPlaying.value) {
+    console.log("[App] Stopping playback...");
+    stopPlayback();
+  } else {
+    console.log("[App] Starting recording...");
+    startRecording();
   }
 };
 
 const startRecording = async () => {
-  if (isRecording.value) {
-    stopRecording();
-    return;
-  }
-
   try {
+    console.log("[App] 🎤 Starting recording...");
+    console.log("[App] Current sessionId:", sessionId.value);
+    console.log("[App] Current isReady:", isReady.value);
+
     await startCapture(16000);
     isRecording.value = true;
     currentResponse.value = "";
+    isPlaying.value = false;
+
+    console.log("[App] 📤 Sending start listen (manual mode)...");
+    startListen("manual");
 
     sendInterval = window.setInterval(() => {
       const audioData = getAudioData();
@@ -234,12 +262,13 @@ const startRecording = async () => {
 
     addMessage({
       role: "user",
-      content: "正在录音...",
+      content: "🎤 正在录音...",
     });
 
-    console.log("[App] Recording started");
+    console.log("[App] ✅ Recording started");
   } catch (error) {
-    console.error("[App] Failed to start recording:", error);
+    console.error("[App] ❌ Failed to start recording:", error);
+    isRecording.value = false;
     throw error;
   }
 };
@@ -255,16 +284,39 @@ const stopRecording = () => {
   stopCapture();
   isRecording.value = false;
 
-  console.log("[App] Recording stopped");
+  console.log("[App] 📤 Sending stop listen...");
+  stopListen();
+
+  console.log("[App] ⏹️ Recording stopped");
+};
+
+const stopPlayback = () => {
+  console.log("[App] 📤 Sending abort to stop TTS playback...");
+  abort("user_request");
+
+  isPlaying.value = false;
+  currentResponse.value = "";
+
+  console.log("[App] ⏹️ Playback stopped");
 };
 
 const handleSendText = () => {
-  if (!inputText.value.trim() || isRecording.value || isPlaying.value) return;
+  console.log("[App] handleSendText called");
+
+  if (!inputText.value.trim() || isRecording.value || isPlaying.value) {
+    console.log("[App] ❌ Send blocked: conditions not met");
+    return;
+  }
+
+  const text = inputText.value.trim();
 
   addMessage({
     role: "user",
-    content: inputText.value.trim(),
+    content: text,
   });
+
+  console.log("[App] 📤 Sending text...");
+  sendText(text);
 
   inputText.value = "";
 };
@@ -283,8 +335,33 @@ const toggleTheme = () => {
   localStorage.setItem("xiaozhi-theme", theme.value);
 };
 
+const toggleMagic = () => {
+  console.log("[App] Magic button clicked");
+};
+
+const toggleFullscreen = () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen();
+    isFullscreen.value = true;
+  } else {
+    if (document.exitFullscreen) {
+      document.exitFullscreen();
+      isFullscreen.value = false;
+    }
+  }
+};
+
+const shareApp = async () => {
+  try {
+    await navigator.clipboard.writeText(window.location.href);
+    alert("已复制URL");
+  } catch (error) {
+    console.error("[App] Failed to copy URL:", error);
+  }
+};
+
 watch(currentResponse, (newValue) => {
-  if (newValue && !isRecording.value) {
+  if (newValue) {
     const lastAssistantMsg = messages.value
       .filter((m) => m.role === "assistant")
       .pop();
@@ -300,14 +377,12 @@ watch(currentResponse, (newValue) => {
 });
 
 watch(isPlaying, (isPlayingNow) => {
-  if (!isPlayingNow) {
-    if (currentResponse.value) {
-      const lastAssistantMsg = messages.value
-        .filter((m) => m.role === "assistant")
-        .pop();
-      if (lastAssistantMsg) {
-        lastAssistantMsg.content = currentResponse.value;
-      }
+  if (!isPlayingNow && currentResponse.value) {
+    const lastAssistantMsg = messages.value
+      .filter((m) => m.role === "assistant")
+      .pop();
+    if (lastAssistantMsg) {
+      lastAssistantMsg.content = currentResponse.value;
     }
   }
 });
@@ -327,8 +402,6 @@ onMounted(async () => {
 </script>
 
 <style lang="scss">
-@import "@/assets/styles/variables.scss";
-
 * {
   margin: 0;
   padding: 0;
@@ -420,7 +493,7 @@ body {
   width: 36px;
   height: 36px;
   border: none;
-  border-radius: 8px;
+  border-radius: 18px;
   background-color: transparent;
   color: var(--color-text-secondary, #6c757d);
   cursor: pointer;
@@ -430,14 +503,15 @@ body {
   transition: all 0.15s ease;
 
   &:hover {
-    background-color: var(--color-secondary, #f8f9fa);
-    color: var(--color-text-primary, #212529);
+    color: #212529;
+    border-radius: 18px;
+    background-color: #eee;
   }
 }
 
 .icon {
-  width: 18px;
-  height: 18px;
+  font-size: 24px;
+  line-height: 1;
 }
 
 .main-wrapper {
@@ -453,7 +527,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  //   padding: 32px;
 }
 
 .avatar-container {
@@ -537,7 +610,6 @@ body {
 .input-area {
   padding: 16px 32px 24px;
   background-color: var(--color-primary, #ffffff);
-  border-top: 1px solid var(--color-border, #dee2e6);
   flex-shrink: 0;
 }
 
@@ -563,6 +635,17 @@ body {
   transition: all 0.2s ease;
   flex-shrink: 0;
 
+  &.recording {
+    background-color: #dc3545;
+    color: white;
+    animation: pulse 1s infinite;
+  }
+
+  &.playing {
+    background-color: #ffc107;
+    color: #212529;
+  }
+
   &:hover:not(:disabled) {
     background-color: var(--color-tertiary, #e9ecef);
   }
@@ -573,9 +656,21 @@ body {
   }
 }
 
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 .voice-icon {
-  width: 18px;
-  height: 18px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .text-input {
@@ -596,7 +691,9 @@ body {
   line-height: 1.5;
 
   &:focus {
-    border-color: var(--color-text-primary, #212529);
+    --glow-color: rgba(99, 102, 241, 1);
+    --glow-color-rgb: 99, 102, 241;
+    @include glow-breathe(2s);
   }
 
   &::placeholder {
@@ -633,8 +730,8 @@ body {
 }
 
 .send-icon {
-  width: 18px;
-  height: 18px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 ::-webkit-scrollbar {

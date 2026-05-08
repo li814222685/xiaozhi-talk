@@ -1,5 +1,5 @@
 import { ref, onUnmounted } from "vue";
-import { useWebSocket } from "./useWebSocket";
+// import { useWebSocket } from "./useWebSocket";
 import { useAudioCapture } from "./useAudioCapture";
 import { useAudioPlayback } from "./useAudioPlayback";
 
@@ -18,7 +18,8 @@ export function useVoiceChat() {
   const currentTranscript = ref("");
   const currentResponse = ref("");
 
-  const wsUrl = import.meta.env.VITE_WS_URL || "ws://192.168.112.254:8989";
+  const wsUrl =
+    import.meta.env.VITE_WS_URL || "ws://192.168.112.254:8989/xiaozhi/v1/";
 
   const { connect, send, onMessage, disconnect } = useWebSocket();
 
@@ -37,7 +38,7 @@ export function useVoiceChat() {
     await setupWorklet();
     await resume();
 
-    onMessage(async (msg) => {
+    onMessage(async (msg: any) => {
       if (msg.type === "audio" && msg.data) {
         const buffer = msg.data as ArrayBuffer;
         const int16Data = new Int16Array(buffer);

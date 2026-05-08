@@ -25,6 +25,16 @@ $radius-lg: 14px;
 $transition-fast: 0.15s ease;
 $transition-normal: 0.2s ease;
 
+// 呼吸光晕效果默认颜色
+$glow-color: rgba(99, 102, 241, 1);
+$glow-color-rgb: 99, 102, 241;
+
+// 默认 CSS 变量（用于运行时）
+:root {
+  --glow-color: rgba(99, 102, 241, 1);
+  --glow-color-rgb: 99, 102, 241;
+}
+
 :root[data-theme="dark"] {
   --color-primary: #1a1a1a;
   --color-secondary: #242424;
