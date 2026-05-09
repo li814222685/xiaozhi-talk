@@ -177,7 +177,7 @@ export function useWebSocket() {
         mcp: false,
       },
       audio_params: {
-        format: "opus",
+        format: "opus", // 改为 opus
         sample_rate: 16000,
         channels: 1,
         frame_duration: 60,

@@ -1,17 +1,13 @@
 {
-  "name": "xiaozhi-web",
-  "private": true,
+  "name": "xiaozhi-audio-proxy",
   "version": "1.0.0",
+  "description": "本地音频代理服务 - PCM转Opus",
   "type": "module",
   "scripts": {
+    "start": "node audio-proxy.js",
     "dev": "vite",
     "build": "vue-tsc && vite build",
     "preview": "vite preview"
-  },
-  "dependencies": {
-    "@mdi/font": "^7.4.47",
-    "@vueuse/core": "^14.3.0",
-    "vue": "^3.4.21"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",
@@ -19,5 +15,12 @@
     "typescript": "^5.4.5",
     "vite": "^5.2.8",
     "vue-tsc": "^2.0.11"
+  },
+  "dependencies": {
+    "opusscript": "^0.0.7",
+    "ws": "^8.16.0",
+    "@mdi/font": "^7.4.47",
+    "@vueuse/core": "^14.3.0",
+    "vue": "^3.4.21"
   }
 }

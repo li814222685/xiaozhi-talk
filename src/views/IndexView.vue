@@ -178,6 +178,52 @@ const {
 
 const { isFullscreen, toggle } = useFullscreen();
 
+// 发送音频数据
+const sendAudio = (audioData: Float32Array) => {
+  if (!isConnected.value) {
+    console.error("[WebSocket] 未连接，无法发送音频");
+    return;
+  }
+
+  // 转换为 Int16Array
+  const int16Data = new Int16Array(audioData.length);
+  for (let i = 0; i < audioData.length; i++) {
+    int16Data[i] = Math.max(-32768, Math.min(32767, audioData[i] * 32767));
+  }
+
+  send(int16Data.buffer);
+};
+
+// 发送开始监听命令
+const sendListenStart = () => {
+  const msg = {
+    session_id: sessionId.value,
+    type: "listen",
+    state: "start",
+    mode: "manual",
+  };
+  send(JSON.stringify(msg));
+};
+
+// 发送停止监听命令
+const sendListenStop = () => {
+  const msg = {
+    session_id: sessionId.value,
+    type: "listen",
+    state: "stop",
+  };
+  send(JSON.stringify(msg));
+};
+
+// 发送中止命令
+const sendAbort = () => {
+  const msg = {
+    type: "abort",
+    reason: "user_request",
+  };
+  send(JSON.stringify(msg));
+};
+
 const init = async () => {
   try {
     console.log("[App] Starting WebSocket connection to:", wsUrl);
@@ -188,11 +234,8 @@ const init = async () => {
       if (msg.type === "audio" && msg.data) {
         console.log("[App] 🔊 Audio data received");
         const buffer = msg.data as ArrayBuffer;
-        const byteLength = buffer.byteLength;
-        const alignedLength = byteLength - (byteLength % 2);
-        const alignedBuffer = buffer.slice(0, alignedLength);
-        const int16Data = new Int16Array(alignedBuffer);
-        await playInt16Array(int16Data);
+        // TODO: 播放音频
+        console.log("[App] 收到音频数据:", buffer.byteLength, "bytes");
         isPlaying.value = true;
       } else if (msg.type === "stt") {
         console.log("[App] 📝 STT:", msg.text);
@@ -270,8 +313,8 @@ const init = async () => {
     isConnected.value = true;
     console.log("[App] ✅ WebSocket connected successfully");
 
-    await setupWorklet();
-    await resume();
+    // await setupWorklet();
+    // await resume();
 
     console.log("[App] ✅ Initialized successfully");
   } catch (error) {
@@ -308,6 +351,135 @@ const addMessage = (msg: Omit<Message, "id" | "timestamp">) => {
   });
 };
 
+// 麦克风相关变量
+let mediaRecorder: MediaRecorder | null = null;
+let audioContext: AudioContext | null = null;
+let audioStream: MediaStream | null = null;
+
+// 处理麦克风按钮点击
+const handleVoiceClick = () => {
+  if (isRecording.value) {
+    stopRecording();
+  } else if (isPlaying.value) {
+    console.log("[App] 停止播放");
+    isPlaying.value = false;
+  } else {
+    startRecording();
+  }
+};
+
+// 开始录音 - 使用 MediaRecorder 编码为 Opus
+const startRecording = async () => {
+  try {
+    console.log("[App] 开始录音...");
+
+    // 创建音频上下文（用于播放）
+    audioContext = new AudioContext({ sampleRate: 16000 });
+
+    // 获取麦克风权限
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: 16000,
+        channelCount: 1,
+      },
+    });
+
+    // 创建 MediaRecorder - 自动编码为 Opus
+    // 检查浏览器支持的 MIME 类型
+    console.log("[App] === 检查浏览器支持的音频格式 ===");
+    console.log(
+      "[App] audio/webm;codecs=opus:",
+      MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    );
+    console.log(
+      "[App] audio/webm:",
+      MediaRecorder.isTypeSupported("audio/webm")
+    );
+    console.log(
+      "[App] audio/opus:",
+      MediaRecorder.isTypeSupported("audio/opus")
+    );
+    console.log(
+      "[App] audio/ogg;codecs=opus:",
+      MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+    );
+
+    // 尝试使用 Opus
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+      ? "audio/webm"
+      : "audio/ogg";
+
+    console.log("[App] 使用 MIME 类型:", mimeType);
+
+    // 创建 MediaRecorder
+    mediaRecorder = new MediaRecorder(audioStream, {
+      mimeType: mimeType,
+    });
+
+    // 收集音频数据
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0 && isRecording.value && isConnected.value) {
+        // 直接发送 Opus 编码的 Blob
+        event.data.arrayBuffer().then((buffer) => {
+          // 调试信息
+          console.log("[App] 发送音频数据:", {
+            size: buffer.byteLength,
+            type: event.data.type,
+            mimeType: mediaRecorder?.mimeType,
+          });
+          send(buffer as ArrayBuffer);
+        });
+      }
+    };
+
+    // 开始录音 - 60ms 一帧
+    mediaRecorder.start(60);
+
+    // 发送开始监听命令
+    sendListenStart();
+
+    // 更新状态
+    isRecording.value = true;
+    console.log("[App] 录音开始，格式: Opus");
+  } catch (error) {
+    console.error("[App] 录音失败:", error);
+    alert("无法访问麦克风，请检查权限设置");
+  }
+};
+
+// 停止录音
+const stopRecording = () => {
+  console.log("[App] 停止录音...");
+
+  // 发送停止监听命令
+  sendListenStop();
+
+  // 停止录音器
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+  }
+
+  // 关闭音频流
+  if (audioStream) {
+    audioStream.getTracks().forEach((track) => track.stop());
+    audioStream = null;
+  }
+
+  // 关闭音频上下文
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+
+  // 更新状态
+  isRecording.value = false;
+  console.log("[App] 录音停止");
+};
+
 const toggleMagic = () => {
   console.log("[App] Magic button clicked");
 };
@@ -333,6 +505,7 @@ onMounted(async () => {
   preloadImages();
 
   await init();
+  
 });
 </script>
 
