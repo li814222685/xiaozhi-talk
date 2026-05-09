@@ -271,7 +271,9 @@ export function useWebSocket() {
       vueUseWs.ws.value.send(data);
     } else {
       const wsState = vueUseWs?.ws.value?.readyState ?? "undefined";
-      console.error(`[WebSocket] ❌ Cannot send: WebSocket not open (readyState: ${wsState}, isConnected: ${isConnected.value}, isReady: ${isReady.value})`);
+      console.error(
+        `[WebSocket] ❌ Cannot send: WebSocket not open (readyState: ${wsState}, isConnected: ${isConnected.value}, isReady: ${isReady.value})`
+      );
       console.log("[WebSocket] ℹ️ WebSocket is disconnected, message not sent");
     }
   };
