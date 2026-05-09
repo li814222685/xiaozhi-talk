@@ -49,13 +49,13 @@
           <img
             :src="idleAvatar"
             class="avatar-image"
-            :class="{ 'avatar-hidden': isPlayingAnimating }"
+            :class="{ 'avatar-hidden': isPlaying || isRecording }"
             alt="Idle Avatar"
           />
           <img
             :src="speakingAvatar"
             class="avatar-image"
-            :class="{ 'avatar-visible': isPlayingAnimating }"
+            :class="{ 'avatar-visible': isPlaying || isRecording }"
             alt="Speaking Avatar"
           />
         </div>
@@ -83,11 +83,12 @@
           <div class="input-container">
             <button
               class="voice-btn"
-              :class="{ recording: isRecording }"
-              :disabled="!isConnected || isPlaying"
+              :class="{ recording: isRecording, playing: isPlaying }"
+              :disabled="!isConnected"
               @click="handleVoiceClick"
             >
               <i v-if="isRecording" class="mdi mdi-stop voice-icon"></i>
+              <i v-else-if="isPlaying" class="mdi mdi-stop voice-icon"></i>
               <i v-else class="mdi mdi-microphone voice-icon"></i>
             </button>
 
@@ -153,14 +154,15 @@ const isPlaying = ref(false);
 const messages = ref<Message[]>([]);
 const inputText = ref("");
 let currentAssistantMessage: Message | null = null;
-let isPlayingAnimating = ref(false); // 用于动画状态，防止闪烁
-let playingAnimationTimeout: number | null = null;
 
 const idleAvatar = "/src/assets/webp/hlw1.webp";
 const speakingAvatar = "/src/assets/webp/hlw2.webp";
 
 const isDev = import.meta.env.DEV;
-const wsUrl = "ws://192.168.112.213:5002/xiaozhi/v1/";
+const wsUrl =
+  import.meta.env.VITE_WS_URL ||
+  (isDev ? "/xiaozhi/v1/" : "ws://192.168.112.254:8989/xiaozhi/v1/");
+
 const {
   connect,
   send,
@@ -175,26 +177,6 @@ const {
 } = useWebSocket();
 
 const { isFullscreen, toggle } = useFullscreen();
-
-// 设置播放动画状态（带防抖，防止闪烁）
-const setPlayingAnimation = (playing: boolean) => {
-  // 清除之前的延迟
-  if (playingAnimationTimeout !== null) {
-    clearTimeout(playingAnimationTimeout);
-    playingAnimationTimeout = null;
-  }
-
-  if (playing) {
-    // 立即设置为播放状态
-    isPlayingAnimating.value = true;
-  } else {
-    // 延迟 300ms 再设置为停止状态，防止短暂中断导致闪烁
-    playingAnimationTimeout = window.setTimeout(() => {
-      isPlayingAnimating.value = false;
-      playingAnimationTimeout = null;
-    }, 300);
-  }
-};
 
 // 发送音频数据
 const sendAudio = (audioData: Float32Array) => {
@@ -258,46 +240,13 @@ const init = async () => {
         console.log("[App] 收到音频数据:", buffer.byteLength, "bytes");
         // 播放音频
         queueAudio(buffer);
-        // 只有收到音频数据时才播放动画2
-        setPlayingAnimation(true);
       } else if (msg.type === "stt") {
         console.log("[App] 📝 STT:", msg.text);
         if (msg.text) {
-          // 如果在录音期间，累积 STT 文本
-          if (isRecording.value) {
-            // 检查是否是新的文本（避免重复）
-            if (msg.text !== currentSttText) {
-              currentSttText = msg.text;
-
-              // 查找或创建当前录音的消息
-              let currentMsg = messages.value.find(
-                (m) => m.id === currentSttMessageId
-              );
-
-              if (!currentMsg) {
-                // 创建新消息
-                const newMsg: Message = {
-                  id:
-                    Date.now().toString() +
-                    Math.random().toString(36).substr(2, 9),
-                  role: "user",
-                  content: msg.text,
-                  timestamp: Date.now(),
-                };
-                messages.value.push(newMsg);
-                currentSttMessageId = newMsg.id;
-                console.log("[App] 添加新 STT 消息:", msg.text);
-              } else {
-                // 更新现有消息
-                currentMsg.content = msg.text;
-                console.log("[App] 更新 STT 消息:", msg.text);
-              }
-            }
-          } else {
-            // 不在录音期间，清空状态
-            currentSttText = "";
-            currentSttMessageId = null;
-          }
+          addMessage({
+            role: "user",
+            content: msg.text,
+          });
         }
       } else if (msg.type === "llm") {
         console.log("[App] 💬 LLM response");
@@ -314,9 +263,9 @@ const init = async () => {
       } else if (msg.type === "tts") {
         console.log("[App] 🔊 TTS:", msg.state, msg.text);
         if (msg.state === "start") {
-          setPlayingAnimation(true);
+          isPlaying.value = true;
         } else if (msg.state === "stop") {
-          setPlayingAnimation(false);
+          isPlaying.value = false;
           currentAssistantMessage = null;
         } else if (msg.state === "sentence_end" && msg.text) {
           const textToAdd = msg.text;
@@ -409,8 +358,6 @@ const addMessage = (msg: Omit<Message, "id" | "timestamp">) => {
 let audioContext: AudioContext | null = null;
 let audioStream: MediaStream | null = null;
 let processorNode: AudioWorkletNode | null = null;
-let currentSttText: string = ""; // 当前正在累积的 STT 文本
-let currentSttMessageId: string | null = null; // 当前 STT 消息的 ID
 
 // 音频播放相关变量
 let audioQueue: Int16Array[] = [];
@@ -423,6 +370,9 @@ let nextPlayTime: number = 0;
 const handleVoiceClick = () => {
   if (isRecording.value) {
     stopRecording();
+  } else if (isPlaying.value) {
+    console.log("[App] 停止播放");
+    isPlaying.value = false;
   } else {
     startRecording();
   }
@@ -433,39 +383,18 @@ const startRecording = async () => {
   try {
     console.log("[App] 开始录音...");
 
-    // 检查浏览器是否支持 getUserMedia
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      console.error("[App] 浏览器不支持 getUserMedia");
-      alert(
-        "您的浏览器不支持麦克风录音。请使用 Chrome、Firefox、Edge 或 Safari 浏览器，并确保在 HTTPS 环境或 localhost 下访问。"
-      );
-      return;
-    }
-
     // 创建音频上下文
     audioContext = new AudioContext({ sampleRate: 16000 });
 
     // 获取麦克风权限
-    try {
-      audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 16000,
-          channelCount: 1,
-        },
-      });
-    } catch (err) {
-      console.error("[App] 获取麦克风权限失败:", err);
-      if (err.name === "NotAllowedError") {
-        alert("请允许访问麦克风权限");
-      } else if (err.name === "NotFoundError") {
-        alert("未找到麦克风设备");
-      } else {
-        alert(`麦克风访问错误: ${err.message}`);
-      }
-      throw err;
-    }
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: 16000,
+        channelCount: 1,
+      },
+    });
 
     // 加载 AudioWorklet 模块
     await audioContext.audioWorklet.addModule("/audio-processor.js");
@@ -550,31 +479,34 @@ const stopRecording = () => {
 const initAudioPlayback = async () => {
   try {
     if (!audioPlayContext) {
+      console.log("[App] 初始化音频播放上下文...");
       audioPlayContext = new AudioContext({ sampleRate: 16000 });
+      console.log("[App] AudioContext 创建成功");
+
       await audioPlayContext.audioWorklet.addModule(
         "/worklet/player-processor.js"
       );
+      console.log("[App] player-processor.js 加载成功");
+
       playerNode = new AudioWorkletNode(audioPlayContext, "player-processor");
       playerNode.connect(audioPlayContext.destination);
-      console.log("[App] 音频播放上下文已初始化");
-    }
+      console.log("[App] playerNode 创建并连接成功");
 
-    // 确保 audioContext 处于活跃状态
-    if (audioPlayContext.state === "suspended") {
-      await audioPlayContext.resume();
-      console.log("[App] 音频播放上下文已恢复");
+      console.log("[App] ✅ 音频播放上下文已初始化");
     }
   } catch (error) {
-    console.error("[App] 初始化音频播放失败:", error);
+    console.error("[App] ❌ 初始化音频播放失败:", error);
   }
 };
 
 // 播放 Int16Array 音频数据
 const playAudio = (int16Data: Int16Array) => {
   if (!audioPlayContext || !playerNode) {
-    console.warn("[App] 音频播放上下文未初始化");
+    console.warn("[App] ❌ 音频播放上下文未初始化");
     return;
   }
+
+  console.log("[App] 准备播放音频:", int16Data.length, "采样");
 
   // 转换为 Float32Array
   const float32Data = new Float32Array(int16Data.length);
@@ -582,29 +514,26 @@ const playAudio = (int16Data: Int16Array) => {
     float32Data[i] = int16Data[i] / 32768;
   }
 
+  console.log("[App] 发送音频到 playerNode...");
+
   // 发送到 player node
   playerNode.port.postMessage({ audioBuffer: float32Data }, [
     float32Data.buffer,
   ]);
-  console.log("[App] 播放音频:", int16Data.length, "采样");
+
+  console.log("[App] ✅ 播放音频:", int16Data.length, "采样");
 };
 
 // 处理音频队列
 const processAudioQueue = async () => {
   if (audioQueue.length === 0) {
     isPlayingAudio = false;
-    // 延迟 100ms 检查是否确实播放完成
-    setTimeout(() => {
-      if (audioQueue.length === 0 && !isRecording.value) {
-        setPlayingAnimation(false);
-        console.log("[App] 音频播放完成");
-      }
-    }, 100);
+    isPlaying.value = false;
     return;
   }
 
   isPlayingAudio = true;
-  setPlayingAnimation(true);
+  isPlaying.value = true;
 
   // 从队列取出音频数据
   const audioData = audioQueue.shift()!;
@@ -617,17 +546,14 @@ const processAudioQueue = async () => {
 // 队列音频数据
 const queueAudio = (buffer: ArrayBuffer) => {
   try {
-    // 确保 audioContext 处于活跃状态
-    if (audioPlayContext && audioPlayContext.state === "suspended") {
-      audioPlayContext.resume().then(() => {
-        console.log("[App] 音频播放上下文已恢复");
-      });
-    }
+    console.log("[App] 收到音频数据，大小:", buffer.byteLength, "字节");
 
     const int16Data = new Int16Array(buffer);
+    console.log("[App] 转换为 Int16Array，采样数:", int16Data.length);
+
     audioQueue.push(int16Data);
     console.log(
-      "[App] 音频入队:",
+      "[App] ✅ 音频入队:",
       int16Data.length,
       "采样, 队列长度:",
       audioQueue.length
@@ -635,10 +561,11 @@ const queueAudio = (buffer: ArrayBuffer) => {
 
     // 如果没有在播放，开始播放
     if (!isPlayingAudio) {
+      console.log("[App] 开始处理音频队列...");
       processAudioQueue();
     }
   } catch (error) {
-    console.error("[App] 处理音频数据失败:", error);
+    console.error("[App] ❌ 处理音频数据失败:", error);
   }
 };
 
@@ -656,6 +583,16 @@ const shareApp = async () => {
 };
 
 onMounted(async () => {
+  const preloadImages = () => {
+    const images = [idleAvatar, speakingAvatar];
+    images.forEach((src) => {
+      const img = new Image();
+      img.src = src;
+    });
+    console.log("[App] Avatar images preloaded");
+  };
+  preloadImages();
+
   await init();
 });
 </script>
