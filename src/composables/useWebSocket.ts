@@ -58,7 +58,7 @@ export function useWebSocket() {
   const handleMessage = (data: ArrayBuffer | string | null) => {
     if (!data) return;
 
-    console.log("[WebSocket] 📥 Received raw data:", data);
+    console.log("[WebSocket] � Received raw data:", data);
     console.log(
       "[WebSocket] Data type:",
       typeof data,
@@ -270,7 +270,9 @@ export function useWebSocket() {
       }
       vueUseWs.ws.value.send(data);
     } else {
-      console.error("[WebSocket] ❌ Cannot send: WebSocket not open");
+      const wsState = vueUseWs?.ws.value?.readyState ?? "undefined";
+      console.error(`[WebSocket] ❌ Cannot send: WebSocket not open (readyState: ${wsState}, isConnected: ${isConnected.value}, isReady: ${isReady.value})`);
+      console.log("[WebSocket] ℹ️ WebSocket is disconnected, message not sent");
     }
   };
 
@@ -365,6 +367,19 @@ export function useWebSocket() {
     }
   };
 
+  const reconnect = async () => {
+    if (url) {
+      console.log("[WebSocket] 🔄 Attempting to reconnect...");
+      isConnected.value = false;
+      isReady.value = false;
+      sessionId.value = "";
+      messageHandlers = [];
+      await connect(url);
+    } else {
+      console.error("[WebSocket] ❌ No URL to reconnect to");
+    }
+  };
+
   const resetDeviceId = () => {
     localStorage.removeItem(DEVICE_ID_KEY);
     localStorage.removeItem(CLIENT_ID_KEY);
@@ -387,6 +402,7 @@ export function useWebSocket() {
     sendText,
     onMessage,
     disconnect,
+    reconnect,
     resetDeviceId,
   };
 }

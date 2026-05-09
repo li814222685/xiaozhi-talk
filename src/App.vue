@@ -9,12 +9,20 @@
               :class="['status-dot', isConnected ? 'online' : 'offline']"
             ></span>
             <span class="status-text">{{
-              isConnected ? "在线" : "连接中"
+              isConnected ? "在线" : isReady ? "重新连接中..." : "连接中..."
             }}</span>
           </div>
         </div>
 
         <div class="header-right">
+          <button
+            v-if="!isConnected"
+            class="btn-icon"
+            @click="reconnect"
+            title="重新连接"
+          >
+            <i class="mdi mdi-refresh icon"></i>
+          </button>
           <button class="btn-icon" @click="toggleMagic">
             <i class="mdi mdi-auto-fix icon"></i>
           </button>
@@ -40,14 +48,20 @@
 
     <div class="main-wrapper">
       <aside class="avatar-aside">
-        <div
-          class="avatar-container"
-          :style="{
-            backgroundImage: `url(${
-              isPlaying || isRecording ? speakingAvatar : idleAvatar
-            })`,
-          }"
-        ></div>
+        <div class="avatar-container">
+          <img
+            :src="idleAvatar"
+            class="avatar-image"
+            :class="{ 'avatar-hidden': isPlaying || isRecording }"
+            alt="Idle Avatar"
+          />
+          <img
+            :src="speakingAvatar"
+            class="avatar-image"
+            :class="{ 'avatar-visible': isPlaying || isRecording }"
+            alt="Speaking Avatar"
+          />
+        </div>
       </aside>
 
       <main class="main-content">
@@ -84,15 +98,21 @@
             <textarea
               v-model="inputText"
               class="text-input"
-              placeholder="输入您想问的问题..."
+              :placeholder="
+                isConnected
+                  ? '输入您想问的问题...'
+                  : '连接已断开，请刷新页面重新连接'
+              "
               rows="1"
               @keydown.enter.exact.prevent="handleSendText"
-              :disabled="isRecording || isPlaying"
+              :disabled="!isConnected || isRecording || isPlaying"
             ></textarea>
 
             <button
               class="send-btn"
-              :disabled="!inputText.trim() || isRecording || isPlaying"
+              :disabled="
+                !isConnected || !inputText.trim() || isRecording || isPlaying
+              "
               @click="handleSendText"
             >
               <i class="mdi mdi-send send-icon"></i>
@@ -144,6 +164,7 @@ const {
   onMessage,
   isReady,
   sessionId,
+  reconnect,
 } = useWebSocket();
 
 const { startCapture, stopCapture, getAudioData, floatTo16BitPCM } =
@@ -163,7 +184,10 @@ const init = async () => {
       if (msg.type === "audio" && msg.data) {
         console.log("[App] 🔊 Audio data received");
         const buffer = msg.data as ArrayBuffer;
-        const int16Data = new Int16Array(buffer);
+        const byteLength = buffer.byteLength;
+        const alignedLength = byteLength - (byteLength % 2);
+        const alignedBuffer = buffer.slice(0, alignedLength);
+        const int16Data = new Int16Array(alignedBuffer);
         await playInt16Array(int16Data);
         isPlaying.value = true;
       } else if (msg.type === "stt") {
@@ -190,26 +214,38 @@ const init = async () => {
         console.log("[App] 🔊 TTS:", msg.state, msg.text);
         if (msg.state === "start") {
           isPlaying.value = true;
-          if (!currentAssistantMessage) {
+        } else if (msg.state === "stop") {
+          isPlaying.value = false;
+          currentAssistantMessage = null;
+        } else if (msg.state === "sentence_end" && msg.text) {
+          const textToAdd = msg.text;
+          if (currentAssistantMessage) {
+            const currentContent = currentAssistantMessage.content;
+            if (!currentContent.endsWith(textToAdd)) {
+              console.log(
+                "[App] 🔊 Adding text to assistant message:",
+                textToAdd
+              );
+              currentAssistantMessage.content += textToAdd;
+            } else {
+              console.log(
+                "[App] ⚠️ Duplicate text detected, skipping:",
+                textToAdd
+              );
+            }
+          } else {
+            console.log(
+              "[App] ⚠️ No currentAssistantMessage, creating new one"
+            );
             const assistantMsg: Message = {
               id:
                 Date.now().toString() + Math.random().toString(36).substr(2, 9),
               role: "assistant",
-              content: "",
+              content: textToAdd,
               timestamp: Date.now(),
             };
             messages.value.push(assistantMsg);
             currentAssistantMessage = assistantMsg;
-          }
-        } else if (msg.state === "stop") {
-          isPlaying.value = false;
-          currentAssistantMessage = null;
-        } else if (
-          (msg.state === "sentence_start" || msg.state === "sentence_end") &&
-          msg.text
-        ) {
-          if (currentAssistantMessage) {
-            currentAssistantMessage.content += msg.text;
           }
         }
       } else if (msg.type === "error") {
@@ -391,6 +427,16 @@ onMounted(async () => {
   }
   document.documentElement.setAttribute("data-theme", theme.value);
 
+  const preloadImages = () => {
+    const images = [idleAvatar, speakingAvatar];
+    images.forEach((src) => {
+      const img = new Image();
+      img.src = src;
+    });
+    console.log("[App] Avatar images preloaded");
+  };
+  preloadImages();
+
   await init();
 });
 </script>
@@ -527,10 +573,35 @@ body {
   width: 100%;
   height: 100%;
   border-radius: 20px;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-position-y: 120px;
+  position: relative;
+  overflow: hidden;
+}
+
+.avatar-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 120px;
+  transition: opacity 0.3s ease-in-out;
+}
+
+.avatar-image:first-child {
+  opacity: 1;
+}
+
+.avatar-image:last-child {
+  opacity: 0;
+}
+
+.avatar-hidden {
+  opacity: 0 !important;
+}
+
+.avatar-visible {
+  opacity: 1 !important;
 }
 
 .main-content {
