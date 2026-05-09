@@ -177,7 +177,7 @@ export function useWebSocket() {
         mcp: false,
       },
       audio_params: {
-        format: "opus", // 改为 opus
+        format: "pcm", // 发送原始 PCM 数据
         sample_rate: 16000,
         channels: 1,
         frame_duration: 60,
@@ -197,7 +197,15 @@ export function useWebSocket() {
       ? `${url}&device-id=${deviceId}&client-id=${clientId}`
       : `${url}?device-id=${deviceId}&client-id=${clientId}`;
 
-    console.log("[WebSocket] Connecting to:", fullUrl);
+    console.log("[WebSocket] 📡 Original URL:", url);
+    console.log("[WebSocket] 📡 Full URL with params:", fullUrl);
+    console.log("[WebSocket] 📡 Device ID:", deviceId);
+    console.log("[WebSocket] 📡 Client ID:", clientId);
+    console.log("[WebSocket] 📡 Is dev mode:", import.meta.env.DEV);
+    console.log(
+      "[WebSocket] 📡 VITE_WS_URL:",
+      import.meta.env.VITE_WS_URL || "(not set)"
+    );
 
     vueUseWs = useVueUseWebSocket(fullUrl, {
       autoReconnect: {
@@ -259,6 +267,7 @@ export function useWebSocket() {
   };
 
   const send = (data: ArrayBuffer | string) => {
+    console.log(vueUseWs?.ws.value);
     if (vueUseWs?.ws.value && vueUseWs.ws.value.readyState === WebSocket.OPEN) {
       if (typeof data === "string") {
         console.log("[WebSocket] 📤 Sending text:", data);
@@ -345,7 +354,7 @@ export function useWebSocket() {
       session_id: sessionId.value,
       type: "listen",
       state: "detect",
-      mode: "manual",
+      mode: "auto",
       text: text,
     };
 

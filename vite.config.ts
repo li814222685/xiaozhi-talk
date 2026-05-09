@@ -13,12 +13,13 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     proxy: {
-      "/xiaozhi": {
-        target: "ws://192.168.112.254:8989",
-        // target: "ws://192.168.112.109:8989",
-        ws: true,
-        changeOrigin: true,
-      },
+      // "/xiaozhi": {
+      //   // target: "ws://192.168.112.213:5002",
+      //   // target: "ws://192.168.112.254:8989",
+      //   // target: "ws://192.168.112.109:8989",
+      //   ws: true,
+      //   changeOrigin: true,
+      // },
     },
   },
   css: {
